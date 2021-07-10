@@ -40,9 +40,36 @@ these are required as well:
 
 We recommend Strawberry Perl, available from <http://strawberryperl.com/>
 Please read NOTES.PERL for more information, including the use of CPAN.
+
+#### ActiveState Perl
+
 An alternative is ActiveState Perl, <https://www.activestate.com/ActivePerl>
-for which you may need to explicitly build the Perl module Win32/Console.pm
-via <https://platform.activestate.com/ActiveState> and then download it.
+
+A pre-built perl specifically for building openssl on windows is also
+available from ActiveState at
+<https://platform.activestate.com/ActiveStateBE/Perl-5.34.0-openssl>.
+If you would like to use this, this distribution contains an
+activestate.yaml file which contains code to perform common builds
+via the ActiveState Platform's state tool which can be installed with:
+
+```
+powershell -Command "& $([scriptblock]::Create((New-Object Net.WebClient).DownloadString('https://platform.activestate.com/dl/cli/install.ps1')))"
+```
+(see https://platform.activestate.com/dev-tools for more details)
+
+Once the state tool is installed, you can build with the default options
+for Windows on AMD64 with Visual C++ by running:
+
+```
+state run build
+```
+in this directory.  This will install perl, NASM (see below) and all required
+perl modules in a virtual environment on your machine and use it to build this
+distribution.  The virtual environment can be removed once the build is
+complete with:
+```
+state clean cache
+```
 
 ### Microsoft Visual C compiler.
 

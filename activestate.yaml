@@ -1,0 +1,81 @@
+project: https://platform.activestate.com/ActiveStateBE/Perl-5.34.0-OpenSSL?branch=main&commitID=315265cb-071f-4972-8ccc-1eb34f239709
+
+scripts:
+  - name: activationMessage
+    language: perl
+    value: |
+        $out = <<EOT;
+            You are now in an activated state, which is like a virtual environment to work
+            in that doesn't affect the rest of your system. To leave, run `exit`.
+
+            What's next?
+            - To learn more about what you can do, run → `state --help`
+            - To modify this runtime like adding packages or platforms, visit https://platform.activestate.com/ActiveStateBE/Perl-5.34.0-OpenSSL
+        EOT
+        $out =~ s/^ +//gm;
+        print $out;
+  - name: build
+    if: eq .OS.Name "Windows"
+    language: batch
+    value: |
+        @ECHO OFF
+        cd %ACTIVESTATE_ACTIVATED%
+        IF "%VSCMD_VER"=="" (
+            GOTO :MinGW
+        ) ELSE (
+            GOTO :MSVC
+        )
+        :MinGW
+        ECHO "Non MSVC build not implemented, please run from a VS Command Prompt"
+        EXIT /B 1
+        :MSVC
+        perl Configure VC-WIN64A && nmake
+        EXIT /B %ERRORLEVEL%
+  - name: build
+    if: eq .OS.Name "Linux"
+    language: bash
+    value: |
+        cd $ACTIVESTATE_ACTIVATED
+        ./config gcc shared zlib
+        make
+  - name: install
+    if: eq .OS.Name "Windows"
+    language: batch
+    value: |
+        @ECHO OFF
+        cd %ACTIVESTATE_ACTIVATED%
+        IF "%VSCMD_VER"=="" (
+            GOTO :MinGW
+        ) ELSE (
+            GOTO :MSVC
+        )
+        :MinGW
+        ECHO "Non MSVC build not implemented, please run from a VS Command Prompt"
+        EXIT /B 1
+        :MSVC
+        nmake install
+        EXIT /B %ERRORLEVEL%
+  - name: install
+    if: eq .OS.Name "Linux"
+    language: bash
+    value: |
+        cd $ACTIVESTATE_ACTIVATED
+        make install
+  - name: clean
+    language: batch
+    if: eq .OS.Name "Windows"
+    value: |
+        @ECHO OFF
+        cd %ACTIVESTATE_ACTIVATED%
+        nmake clean
+  - name: clean
+    if: eq .OS.Name "Linux"
+    language: bash
+    value: |
+        cd %ACTIVESTATE_ACTIVATED%
+        make clean
+events:
+  # This is the ACTIVATE event, it will run whenever a new virtual environment is created (eg. by running `state activate`)
+  # On Linux and macOS this will be ran as part of your shell's rc file, so you can use it to set up aliases, functions, environment variables, etc.
+  - name: ACTIVATE
+    value: perl.exe $scripts.activationMessage.path()
