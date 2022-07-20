@@ -1,5 +1,5 @@
 /*
- * Copyright 1995-2021 The OpenSSL Project Authors. All Rights Reserved.
+ * Copyright 1995-2022 The OpenSSL Project Authors. All Rights Reserved.
  *
  * Licensed under the Apache License 2.0 (the "License").  You may not use
  * this file except in compliance with the License.  You can obtain a copy
@@ -138,7 +138,7 @@ static int lookup_cert_match(X509 **result, X509_STORE_CTX *ctx, X509 *x)
         else
             *result = xtmp;
     }
-    sk_X509_pop_free(certs, X509_free);
+    OSSL_STACK_OF_X509_free(certs);
     return ret;
 }
 
@@ -147,7 +147,7 @@ static int lookup_cert_match(X509 **result, X509_STORE_CTX *ctx, X509 *x)
  * The error code is set to |err| if |err| is not X509_V_OK, else
  * |ctx->error| is left unchanged (under the assumption it is set elsewhere).
  * The error depth is |depth| if >= 0, else it defaults to |ctx->error_depth|.
- * The error cert is |x| if not NULL, else defaults to the chain cert at depth.
+ * The error cert is |x| if not NULL, else the cert in |ctx->chain| at |depth|.
  *
  * Returns 0 to abort verification with an error, non-zero to continue.
  */
@@ -157,7 +157,7 @@ static int verify_cb_cert(X509_STORE_CTX *ctx, X509 *x, int depth, int err)
         depth = ctx->error_depth;
     else
         ctx->error_depth = depth;
-    ctx->current_cert = (x != NULL) ? x : sk_X509_value(ctx->chain, depth);
+    ctx->current_cert = x != NULL ? x : sk_X509_value(ctx->chain, depth);
     if (err != X509_V_OK)
         ctx->error = err;
     return ctx->verify_cb(0, ctx);
@@ -180,6 +180,7 @@ static int verify_cb_crl(X509_STORE_CTX *ctx, int err)
     return ctx->verify_cb(0, ctx);
 }
 
+/* Sadly, returns 0 also on internal error in ctx->verify_cb(). */
 static int check_auth_level(X509_STORE_CTX *ctx)
 {
     int i;
@@ -207,7 +208,10 @@ static int check_auth_level(X509_STORE_CTX *ctx)
     return 1;
 }
 
-/* Returns -1 on internal error */
+/*-
+ * Returns -1 on internal error.
+ * Sadly, returns 0 also on internal error in ctx->verify_cb().
+ */
 static int verify_chain(X509_STORE_CTX *ctx)
 {
     int err;
@@ -258,6 +262,10 @@ int X509_STORE_CTX_verify(X509_STORE_CTX *ctx)
     return X509_verify_cert(ctx);
 }
 
+/*-
+ * Returns -1 on internal error.
+ * Sadly, returns 0 also on internal error in ctx->verify_cb().
+ */
 int X509_verify_cert(X509_STORE_CTX *ctx)
 {
     int ret;
@@ -351,8 +359,6 @@ static int check_issued(ossl_unused X509_STORE_CTX *ctx, X509 *x, X509 *issuer)
      * SUBJECT_ISSUER_MISMATCH just means 'x' is clearly not issued by 'issuer'.
      * Every other error code likely indicates a real error.
      */
-    if (err != X509_V_ERR_SUBJECT_ISSUER_MISMATCH)
-        ctx->error = err;
     return 0;
 }
 
@@ -370,7 +376,7 @@ static int get_issuer_sk(X509 **issuer, X509_STORE_CTX *ctx, X509 *x)
 
 /*-
  * Alternative lookup method: look from a STACK stored in other_ctx.
- * Returns NULL on internal error (such as out of memory).
+ * Returns NULL on internal/fatal error, empty stack if not found.
  */
 static STACK_OF(X509) *lookup_certs_sk(X509_STORE_CTX *ctx,
                                        const X509_NAME *nm)
@@ -385,7 +391,7 @@ static STACK_OF(X509) *lookup_certs_sk(X509_STORE_CTX *ctx,
         x = sk_X509_value(ctx->other_ctx, i);
         if (X509_NAME_cmp(nm, X509_get_subject_name(x)) == 0) {
             if (!X509_add_cert(sk, x, X509_ADD_FLAG_UP_REF)) {
-                sk_X509_pop_free(sk, X509_free);
+                OSSL_STACK_OF_X509_free(sk);
                 ctx->error = X509_V_ERR_OUT_OF_MEM;
                 return NULL;
             }
@@ -397,7 +403,7 @@ static STACK_OF(X509) *lookup_certs_sk(X509_STORE_CTX *ctx,
 /*
  * Check EE or CA certificate purpose.  For trusted certificates explicit local
  * auxiliary trust can be used to override EKU-restrictions.
- * Sadly, returns 0 also on internal error.
+ * Sadly, returns 0 also on internal error in ctx->verify_cb().
  */
 static int check_purpose(X509_STORE_CTX *ctx, X509 *x, int purpose, int depth,
                          int must_be_ca)
@@ -430,7 +436,7 @@ static int check_purpose(X509_STORE_CTX *ctx, X509 *x, int purpose, int depth,
         return 1;
     case X509_TRUST_REJECTED:
         break;
-    default:
+    default: /* can only be X509_TRUST_UNTRUSTED */
         switch (X509_check_purpose(x, purpose, must_be_ca > 0)) {
         case 1:
             return 1;
@@ -446,9 +452,9 @@ static int check_purpose(X509_STORE_CTX *ctx, X509 *x, int purpose, int depth,
     return verify_cb_cert(ctx, x, depth, X509_V_ERR_INVALID_PURPOSE);
 }
 
-/*
+/*-
  * Check extensions of a cert chain for consistency with the supplied purpose.
- * Sadly, returns 0 also on internal error.
+ * Sadly, returns 0 also on internal error in ctx->verify_cb().
  */
 static int check_extensions(X509_STORE_CTX *ctx)
 {
@@ -630,7 +636,7 @@ static int has_san_id(X509 *x, int gtype)
     GENERAL_NAMES *gs = X509_get_ext_d2i(x, NID_subject_alt_name, NULL, NULL);
 
     if (gs == NULL)
-        return -1;
+        return 0;
 
     for (i = 0; i < sk_GENERAL_NAME_num(gs); i++) {
         GENERAL_NAME *g = sk_GENERAL_NAME_value(gs, i);
@@ -644,7 +650,10 @@ static int has_san_id(X509 *x, int gtype)
     return ret;
 }
 
-/* Returns -1 on internal error */
+/*-
+ * Returns -1 on internal error.
+ * Sadly, returns 0 also on internal error in ctx->verify_cb().
+ */
 static int check_name_constraints(X509_STORE_CTX *ctx)
 {
     int i;
@@ -917,7 +926,7 @@ static int check_revocation(X509_STORE_CTX *ctx)
         last = sk_X509_num(ctx->chain) - 1;
     } else {
         /* If checking CRL paths this isn't the EE certificate */
-        if (ctx->parent)
+        if (ctx->parent != NULL)
             return 1;
         last = 0;
     }
@@ -1628,6 +1637,7 @@ static int cert_crl(X509_STORE_CTX *ctx, X509_CRL *crl, X509 *x)
     return 1;
 }
 
+/* Sadly, returns 0 also on internal error in ctx->verify_cb(). */
 static int check_policy(X509_STORE_CTX *ctx)
 {
     int ret;
@@ -1703,6 +1713,7 @@ static int check_policy(X509_STORE_CTX *ctx)
  * the validation status.
  *
  * Return 1 on success, 0 otherwise.
+ * Sadly, returns 0 also on internal error in ctx->verify_cb().
  */
 int ossl_x509_check_cert_time(X509_STORE_CTX *ctx, X509 *x, int depth)
 {
@@ -1732,7 +1743,7 @@ int ossl_x509_check_cert_time(X509_STORE_CTX *ctx, X509 *x, int depth)
 
 /*
  * Verify the issuer signatures and cert times of ctx->chain.
- * Sadly, returns 0 also on internal error.
+ * Sadly, returns 0 also on internal error in ctx->verify_cb().
  */
 static int internal_verify(X509_STORE_CTX *ctx)
 {
@@ -2016,8 +2027,8 @@ X509_CRL *X509_CRL_diff(X509_CRL *base, X509_CRL *newer,
 {
     X509_CRL *crl = NULL;
     int i;
-
     STACK_OF(X509_REVOKED) *revs = NULL;
+
     /* CRLs can't be delta already */
     if (base->base_crl_number != NULL || newer->base_crl_number != NULL) {
         ERR_raise(ERR_LIB_X509, X509_R_CRL_ALREADY_DELTA);
@@ -2230,6 +2241,12 @@ int X509_STORE_CTX_purpose_inherit(X509_STORE_CTX *ctx, int def_purpose,
     /* If purpose not set use default */
     if (purpose == 0)
         purpose = def_purpose;
+    /*
+     * If purpose is set but we don't have a default then set the default to
+     * the current purpose
+     */
+    else if (def_purpose == 0)
+        def_purpose = purpose;
     /* If we have a purpose then check it is valid */
     if (purpose != 0) {
         X509_PURPOSE *ptmp;
@@ -2242,11 +2259,6 @@ int X509_STORE_CTX_purpose_inherit(X509_STORE_CTX *ctx, int def_purpose,
         ptmp = X509_PURPOSE_get0(idx);
         if (ptmp->trust == X509_TRUST_DEFAULT) {
             idx = X509_PURPOSE_get_by_id(def_purpose);
-            /*
-             * XXX: In the two callers above def_purpose is always 0, which is
-             * not a known value, so idx will always be -1.  How is the
-             * X509_TRUST_DEFAULT case actually supposed to be handled?
-             */
             if (idx == -1) {
                 ERR_raise(ERR_LIB_X509, X509_R_UNKNOWN_PURPOSE_ID);
                 return 0;
@@ -2484,7 +2496,7 @@ void X509_STORE_CTX_cleanup(X509_STORE_CTX *ctx)
     }
     X509_policy_tree_free(ctx->tree);
     ctx->tree = NULL;
-    sk_X509_pop_free(ctx->chain, X509_free);
+    OSSL_STACK_OF_X509_free(ctx->chain);
     ctx->chain = NULL;
     CRYPTO_free_ex_data(CRYPTO_EX_INDEX_X509_STORE_CTX, ctx, &(ctx->ex_data));
     memset(&ctx->ex_data, 0, sizeof(ctx->ex_data));
@@ -2523,7 +2535,7 @@ void X509_STORE_CTX_set0_untrusted(X509_STORE_CTX *ctx, STACK_OF(X509) *sk)
 
 void X509_STORE_CTX_set0_verified_chain(X509_STORE_CTX *ctx, STACK_OF(X509) *sk)
 {
-    sk_X509_pop_free(ctx->chain, X509_free);
+    OSSL_STACK_OF_X509_free(ctx->chain);
     ctx->chain = sk;
 }
 
@@ -2896,6 +2908,7 @@ static void dane_reset(SSL_DANE *dane)
     dane->pdpth = -1;
 }
 
+/* Sadly, returns 0 also on internal error in ctx->verify_cb(). */
 static int check_leaf_suiteb(X509_STORE_CTX *ctx, X509 *cert)
 {
     int err = X509_chain_check_suiteb(NULL, cert, NULL, ctx->param->flags);
@@ -2983,7 +2996,10 @@ static int get1_trusted_issuer(X509 **issuer, X509_STORE_CTX *ctx, X509 *cert)
     return ok;
 }
 
-/* Returns -1 on internal error */
+/*-
+ * Returns -1 on internal error.
+ * Sadly, returns 0 also on internal error in ctx->verify_cb().
+ */
 static int build_chain(X509_STORE_CTX *ctx)
 {
     SSL_DANE *dane = ctx->dane;
@@ -2996,7 +3012,6 @@ static int build_chain(X509_STORE_CTX *ctx)
     int alt_untrusted = 0;
     int max_depth;
     int ok = 0;
-    int prev_error = ctx->error;
     int i;
 
     /* Our chain starts with a single untrusted element. */
@@ -3023,20 +3038,24 @@ static int build_chain(X509_STORE_CTX *ctx)
         may_trusted = 1;
     }
 
-    /*
-     * Shallow-copy the stack of untrusted certificates (with TLS, this is
-     * typically the content of the peer's certificate message) so can make
-     * multiple passes over it, while free to remove elements as we go.
-     */
-    if ((sk_untrusted = sk_X509_dup(ctx->untrusted)) == NULL)
+    /* Initialize empty untrusted stack. */
+    if ((sk_untrusted = sk_X509_new_null()) == NULL)
         goto memerr;
 
     /*
-     * If we got any "DANE-TA(2) Cert(0) Full(0)" trust anchors from DNS, add
-     * them to our working copy of the untrusted certificate stack.
+     * If we got any "Cert(0) Full(0)" trust anchors from DNS, *prepend* them
+     * to our working copy of the untrusted certificate stack.
      */
     if (DANETLS_ENABLED(dane) && dane->certs != NULL
         && !X509_add_certs(sk_untrusted, dane->certs, X509_ADD_FLAG_DEFAULT))
+        goto memerr;
+
+    /*
+     * Shallow-copy the stack of untrusted certificates (with TLS, this is
+     * typically the content of the peer's certificate message) so we can make
+     * multiple passes over it, while free to remove elements as we go.
+     */
+    if (!X509_add_certs(sk_untrusted, ctx->untrusted, X509_ADD_FLAG_DEFAULT))
         goto memerr;
 
     /*
@@ -3227,7 +3246,7 @@ static int build_chain(X509_STORE_CTX *ctx)
             if (!ossl_assert(num == ctx->num_untrusted))
                 goto int_err;
             curr = sk_X509_value(ctx->chain, num - 1);
-            issuer = (X509_self_signed(curr, 0) || num > max_depth) ?
+            issuer = (X509_self_signed(curr, 0) > 0 || num > max_depth) ?
                 NULL : find_issuer(ctx, sk_untrusted, curr);
             if (issuer == NULL) {
                 /*
@@ -3274,20 +3293,18 @@ static int build_chain(X509_STORE_CTX *ctx)
 
     switch (trust) {
     case X509_TRUST_TRUSTED:
-        /* Must restore any previous error value for backward compatibility */
-        ctx->error = prev_error;
         return 1;
     case X509_TRUST_REJECTED:
         /* Callback already issued */
         return 0;
     case X509_TRUST_UNTRUSTED:
     default:
-        switch(ctx->error) {
+        switch (ctx->error) {
         case X509_V_ERR_ERROR_IN_CERT_NOT_BEFORE_FIELD:
         case X509_V_ERR_CERT_NOT_YET_VALID:
         case X509_V_ERR_ERROR_IN_CERT_NOT_AFTER_FIELD:
         case X509_V_ERR_CERT_HAS_EXPIRED:
-            return 0; /* Callback already issued by ossl_x509_check_cert_time() */
+            return 0; /* Callback already done by ossl_x509_check_cert_time() */
         default: /* A preliminary error has become final */
             return verify_cb_cert(ctx, NULL, num - 1, ctx->error);
         case X509_V_OK:
@@ -3298,7 +3315,7 @@ static int build_chain(X509_STORE_CTX *ctx)
         CB_FAIL_IF(DANETLS_ENABLED(dane)
                        && (!DANETLS_HAS_PKIX(dane) || dane->pdpth >= 0),
                    ctx, NULL, num - 1, X509_V_ERR_DANE_NO_MATCH);
-        if (X509_self_signed(sk_X509_value(ctx->chain, num - 1), 0))
+        if (X509_self_signed(sk_X509_value(ctx->chain, num - 1), 0) > 0)
             return verify_cb_cert(ctx, NULL, num - 1,
                                   num == 1
                                   ? X509_V_ERR_DEPTH_ZERO_SELF_SIGNED_CERT
@@ -3408,21 +3425,19 @@ static int check_key_level(X509_STORE_CTX *ctx, X509 *cert)
 static int check_curve(X509 *cert)
 {
     EVP_PKEY *pkey = X509_get0_pubkey(cert);
+    int ret, val;
 
     /* Unsupported or malformed key */
     if (pkey == NULL)
         return -1;
+    if (EVP_PKEY_get_id(pkey) != EVP_PKEY_EC)
+        return 1;
 
-    if (EVP_PKEY_get_id(pkey) == EVP_PKEY_EC) {
-        int ret, val;
-
-        ret = EVP_PKEY_get_int_param(pkey,
-                                     OSSL_PKEY_PARAM_EC_DECODED_FROM_EXPLICIT_PARAMS,
-                                     &val);
-        return ret < 0 ? ret : !val;
-    }
-
-    return 1;
+    ret =
+        EVP_PKEY_get_int_param(pkey,
+                               OSSL_PKEY_PARAM_EC_DECODED_FROM_EXPLICIT_PARAMS,
+                               &val);
+    return ret < 0 ? ret : !val;
 }
 
 /*-

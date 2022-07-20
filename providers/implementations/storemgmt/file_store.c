@@ -1,5 +1,5 @@
 /*
- * Copyright 2020-2021 The OpenSSL Project Authors. All Rights Reserved.
+ * Copyright 2020-2022 The OpenSSL Project Authors. All Rights Reserved.
  *
  * Licensed under the Apache License 2.0 (the "License").  You may not use
  * this file except in compliance with the License.  You can obtain a copy
@@ -8,8 +8,6 @@
  */
 
 /* This file has quite some overlap with engines/e_loader_attic.c */
-
-#include "e_os.h"                /* To get strncasecmp() on Windows */
 
 #include <string.h>
 #include <sys/stat.h>
@@ -175,7 +173,7 @@ static void *file_open_dir(const char *path, const char *uri, void *provctx)
 
     if ((ctx = new_file_ctx(IS_DIR, uri, provctx)) == NULL) {
         ERR_raise(ERR_LIB_PROV, ERR_R_MALLOC_FAILURE);
-        goto err;
+        return NULL;
     }
 
     ctx->_.dir.last_entry = OPENSSL_DIR_read(&ctx->_.dir.ctx, path);
@@ -203,7 +201,7 @@ static void *file_open(void *provctx, const char *uri)
         unsigned int check_absolute:1;
     } path_data[2];
     size_t path_data_n = 0, i;
-    const char *path;
+    const char *path, *p = uri, *q;
     BIO *bio;
 
     ERR_set_mark();
@@ -215,20 +213,18 @@ static void *file_open(void *provctx, const char *uri)
     path_data[path_data_n++].path = uri;
 
     /*
-     * Second step, if the URI appears to start with the 'file' scheme,
+     * Second step, if the URI appears to start with the "file" scheme,
      * extract the path and make that the second path to check.
      * There's a special case if the URI also contains an authority, then
      * the full URI shouldn't be used as a path anywhere.
      */
-    if (strncasecmp(uri, "file:", 5) == 0) {
-        const char *p = &uri[5];
-
-        if (strncmp(&uri[5], "//", 2) == 0) {
+    if (CHECK_AND_SKIP_CASE_PREFIX(p, "file:")) {
+        q = p;
+        if (CHECK_AND_SKIP_CASE_PREFIX(q, "//")) {
             path_data_n--;           /* Invalidate using the full URI */
-            if (strncasecmp(&uri[7], "localhost/", 10) == 0) {
-                p = &uri[16];
-            } else if (uri[7] == '/') {
-                p = &uri[7];
+            if (CHECK_AND_SKIP_CASE_PREFIX(q, "localhost/")
+                    || CHECK_AND_SKIP_CASE_PREFIX(q, "/")) {
+                p = q - 1;
             } else {
                 ERR_clear_last_mark();
                 ERR_raise(ERR_LIB_PROV, PROV_R_URI_AUTHORITY_UNSUPPORTED);
@@ -238,7 +234,7 @@ static void *file_open(void *provctx, const char *uri)
 
         path_data[path_data_n].check_absolute = 1;
 #ifdef _WIN32
-        /* Windows file: URIs with a drive letter start with a / */
+        /* Windows "file:" URIs with a drive letter start with a '/' */
         if (p[0] == '/' && p[2] == ':' && p[3] == '/') {
             char c = tolower(p[1]);
 
@@ -437,6 +433,31 @@ static int file_setup_decoders(struct file_ctx_st *ctx)
             goto err;
         }
 
+        /*
+         * Where applicable, set the outermost structure name.
+         * The goal is to avoid the STORE object types that are
+         * potentially password protected but aren't interesting
+         * for this load.
+         */
+        switch (ctx->expected_type) {
+        case OSSL_STORE_INFO_CERT:
+            if (!OSSL_DECODER_CTX_set_input_structure(ctx->_.file.decoderctx,
+                                                      "Certificate")) {
+                ERR_raise(ERR_LIB_PROV, ERR_R_OSSL_DECODER_LIB);
+                goto err;
+            }
+            break;
+        case OSSL_STORE_INFO_CRL:
+            if (!OSSL_DECODER_CTX_set_input_structure(ctx->_.file.decoderctx,
+                                                      "CertificateList")) {
+                ERR_raise(ERR_LIB_PROV, ERR_R_OSSL_DECODER_LIB);
+                goto err;
+            }
+            break;
+        default:
+            break;
+        }
+
         for (to_algo = ossl_any_to_obj_algorithm;
              to_algo->algorithm_names != NULL;
              to_algo++) {
@@ -567,7 +588,8 @@ static int file_name_check(struct file_ctx_st *ctx, const char *name)
     /*
      * First, check the basename
      */
-    if (strncasecmp(name, ctx->_.dir.search_name, len) != 0 || name[len] != '.')
+    if (OPENSSL_strncasecmp(name, ctx->_.dir.search_name, len) != 0
+        || name[len] != '.')
         return 0;
     p = &name[len + 1];
 

@@ -648,9 +648,9 @@ static int asn1_template_noexp_d2i(ASN1_VALUE **val,
                 break;
             }
             skfield = NULL;
-            if (!asn1_item_embed_d2i(&skfield, &p, len,
+            if (asn1_item_embed_d2i(&skfield, &p, len,
                                      ASN1_ITEM_ptr(tt->item), -1, 0, 0, ctx,
-                                     depth, libctx, propq)) {
+                                     depth, libctx, propq) <= 0) {
                 ERR_raise(ERR_LIB_ASN1, ERR_R_NESTED_ASN1_ERROR);
                 /* |skfield| may be partially allocated despite failure. */
                 ASN1_item_free(skfield, ASN1_ITEM_ptr(tt->item));
@@ -935,9 +935,7 @@ static int asn1_ex_c2i(ASN1_VALUE **pval, const unsigned char *cont, int len,
         }
         /* If we've already allocated a buffer use it */
         if (*free_cont) {
-            OPENSSL_free(stmp->data);
-            stmp->data = (unsigned char *)cont; /* UGLY CAST! RL */
-            stmp->length = len;
+            ASN1_STRING_set0(stmp, (unsigned char *)cont /* UGLY CAST! */, len);
             *free_cont = 0;
         } else {
             if (!ASN1_STRING_set(stmp, cont, len)) {
