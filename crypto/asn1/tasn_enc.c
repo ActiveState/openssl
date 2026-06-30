@@ -1,5 +1,5 @@
 /*
- * Copyright 2000-2021 The OpenSSL Project Authors. All Rights Reserved.
+ * Copyright 2000-2026 The OpenSSL Project Authors. All Rights Reserved.
  *
  * Licensed under the Apache License 2.0 (the "License").  You may not use
  * this file except in compliance with the License.  You can obtain a copy
@@ -17,17 +17,17 @@
 #include "asn1_local.h"
 
 static int asn1_i2d_ex_primitive(const ASN1_VALUE **pval, unsigned char **out,
-                                 const ASN1_ITEM *it, int tag, int aclass);
+    const ASN1_ITEM *it, int tag, int aclass);
 static int asn1_set_seq_out(STACK_OF(const_ASN1_VALUE) *sk,
-                            unsigned char **out,
-                            int skcontlen, const ASN1_ITEM *item,
-                            int do_sort, int iclass);
+    unsigned char **out,
+    int skcontlen, const ASN1_ITEM *item,
+    int do_sort, int iclass);
 static int asn1_template_ex_i2d(const ASN1_VALUE **pval, unsigned char **out,
-                                const ASN1_TEMPLATE *tt, int tag, int aclass);
+    const ASN1_TEMPLATE *tt, int tag, int aclass);
 static int asn1_item_flags_i2d(const ASN1_VALUE *val, unsigned char **out,
-                               const ASN1_ITEM *it, int flags);
+    const ASN1_ITEM *it, int flags);
 static int asn1_ex_i2c(const ASN1_VALUE **pval, unsigned char *cout, int *putype,
-                       const ASN1_ITEM *it);
+    const ASN1_ITEM *it);
 
 /*
  * Top level i2d equivalents: the 'ndef' variant instructs the encoder to use
@@ -35,7 +35,7 @@ static int asn1_ex_i2c(const ASN1_VALUE **pval, unsigned char *cout, int *putype
  */
 
 int ASN1_item_ndef_i2d(const ASN1_VALUE *val, unsigned char **out,
-                       const ASN1_ITEM *it)
+    const ASN1_ITEM *it)
 {
     return asn1_item_flags_i2d(val, out, it, ASN1_TFLG_NDEF);
 }
@@ -53,7 +53,7 @@ int ASN1_item_i2d(const ASN1_VALUE *val, unsigned char **out, const ASN1_ITEM *i
  */
 
 static int asn1_item_flags_i2d(const ASN1_VALUE *val, unsigned char **out,
-                               const ASN1_ITEM *it, int flags)
+    const ASN1_ITEM *it, int flags)
 {
     if (out != NULL && *out == NULL) {
         unsigned char *p, *buf;
@@ -62,10 +62,8 @@ static int asn1_item_flags_i2d(const ASN1_VALUE *val, unsigned char **out,
         len = ASN1_item_ex_i2d(&val, NULL, it, -1, flags);
         if (len <= 0)
             return len;
-        if ((buf = OPENSSL_malloc(len)) == NULL) {
-            ERR_raise(ERR_LIB_ASN1, ERR_R_MALLOC_FAILURE);
+        if ((buf = OPENSSL_malloc(len)) == NULL)
             return -1;
-        }
         p = buf;
         ASN1_item_ex_i2d(&val, &p, it, -1, flags);
         *out = buf;
@@ -81,28 +79,22 @@ static int asn1_item_flags_i2d(const ASN1_VALUE *val, unsigned char **out,
  */
 
 int ASN1_item_ex_i2d(const ASN1_VALUE **pval, unsigned char **out,
-                     const ASN1_ITEM *it, int tag, int aclass)
+    const ASN1_ITEM *it, int tag, int aclass)
 {
     const ASN1_TEMPLATE *tt = NULL;
     int i, seqcontlen, seqlen, ndef = 1;
     const ASN1_EXTERN_FUNCS *ef;
     const ASN1_AUX *aux = it->funcs;
-    ASN1_aux_const_cb *asn1_cb = NULL;
 
     if ((it->itype != ASN1_ITYPE_PRIMITIVE) && *pval == NULL)
         return 0;
-
-    if (aux != NULL) {
-        asn1_cb = ((aux->flags & ASN1_AFLG_CONST_CB) != 0) ? aux->asn1_const_cb
-            : (ASN1_aux_const_cb *)aux->asn1_cb; /* backward compatibility */
-    }
 
     switch (it->itype) {
 
     case ASN1_ITYPE_PRIMITIVE:
         if (it->templates)
             return asn1_template_ex_i2d(pval, out, it->templates,
-                                        tag, aclass);
+                tag, aclass);
         return asn1_i2d_ex_primitive(pval, out, it, tag, aclass);
 
     case ASN1_ITYPE_MSTRING:
@@ -125,7 +117,7 @@ int ASN1_item_ex_i2d(const ASN1_VALUE **pval, unsigned char **out,
             ERR_raise(ERR_LIB_ASN1, ASN1_R_BAD_TEMPLATE);
             return -1;
         }
-        if (asn1_cb && !asn1_cb(ASN1_OP_I2D_PRE, pval, it, NULL))
+        if (!ossl_asn1_call_aux_cb(aux, ASN1_OP_I2D_PRE, pval, it, NULL))
             return 0;
         i = ossl_asn1_get_choice_selector_const(pval, it);
         if ((i >= 0) && (i < it->tcount)) {
@@ -136,7 +128,7 @@ int ASN1_item_ex_i2d(const ASN1_VALUE **pval, unsigned char **out,
             return asn1_template_ex_i2d(pchval, out, chtt, -1, aclass);
         }
         /* Fixme: error condition if selector out of range */
-        if (asn1_cb && !asn1_cb(ASN1_OP_I2D_POST, pval, it, NULL))
+        if (!ossl_asn1_call_aux_cb(aux, ASN1_OP_I2D_POST, pval, it, NULL))
             return 0;
         break;
 
@@ -168,7 +160,7 @@ int ASN1_item_ex_i2d(const ASN1_VALUE **pval, unsigned char **out,
             aclass = (aclass & ~ASN1_TFLG_TAG_CLASS)
                 | V_ASN1_UNIVERSAL;
         }
-        if (asn1_cb && !asn1_cb(ASN1_OP_I2D_PRE, pval, it, NULL))
+        if (!ossl_asn1_call_aux_cb(aux, ASN1_OP_I2D_PRE, pval, it, NULL))
             return 0;
         /* First work out sequence content length */
         for (i = 0, tt = it->templates; i < it->tcount; tt++, i++) {
@@ -202,19 +194,18 @@ int ASN1_item_ex_i2d(const ASN1_VALUE **pval, unsigned char **out,
         }
         if (ndef == 2)
             ASN1_put_eoc(out);
-        if (asn1_cb && !asn1_cb(ASN1_OP_I2D_POST, pval, it, NULL))
+        if (!ossl_asn1_call_aux_cb(aux, ASN1_OP_I2D_POST, pval, it, NULL))
             return 0;
         return seqlen;
 
     default:
         return 0;
-
     }
     return 0;
 }
 
 static int asn1_template_ex_i2d(const ASN1_VALUE **pval, unsigned char **out,
-                                const ASN1_TEMPLATE *tt, int tag, int iclass)
+    const ASN1_TEMPLATE *tt, int tag, int iclass)
 {
     const int flags = tt->flags;
     int i, ret, ttag, tclass, ndef, len;
@@ -305,7 +296,7 @@ static int asn1_template_ex_i2d(const ASN1_VALUE **pval, unsigned char **out,
         for (i = 0; i < sk_const_ASN1_VALUE_num(sk); i++) {
             skitem = sk_const_ASN1_VALUE_value(sk, i);
             len = ASN1_item_ex_i2d(&skitem, NULL, ASN1_ITEM_ptr(tt->item),
-                                   -1, iclass);
+                -1, iclass);
             if (len == -1 || (skcontlen > INT_MAX - len))
                 return -1;
             if (len == 0 && (tt->flags & ASN1_TFLG_OPTIONAL) == 0) {
@@ -334,7 +325,7 @@ static int asn1_template_ex_i2d(const ASN1_VALUE **pval, unsigned char **out,
         ASN1_put_object(out, ndef, skcontlen, sktag, skaclass);
         /* And the stuff itself */
         asn1_set_seq_out(sk, out, skcontlen, ASN1_ITEM_ptr(tt->item),
-                         isset, iclass);
+            isset, iclass);
         if (ndef == 2) {
             ASN1_put_eoc(out);
             if (flags & ASN1_TFLG_EXPTAG)
@@ -369,7 +360,7 @@ static int asn1_template_ex_i2d(const ASN1_VALUE **pval, unsigned char **out,
 
     /* Either normal or IMPLICIT tagging: combine class and flags */
     len = ASN1_item_ex_i2d(pval, out, ASN1_ITEM_ptr(tt->item),
-                              ttag, tclass | iclass);
+        ttag, tclass | iclass);
     if (len == 0 && (tt->flags & ASN1_TFLG_OPTIONAL) == 0) {
         ERR_raise(ERR_LIB_ASN1, ASN1_R_ILLEGAL_ZERO_CONTENT);
         return -1;
@@ -399,9 +390,9 @@ static int der_cmp(const void *a, const void *b)
 /* Output the content octets of SET OF or SEQUENCE OF */
 
 static int asn1_set_seq_out(STACK_OF(const_ASN1_VALUE) *sk,
-                            unsigned char **out,
-                            int skcontlen, const ASN1_ITEM *item,
-                            int do_sort, int iclass)
+    unsigned char **out,
+    int skcontlen, const ASN1_ITEM *item,
+    int do_sort, int iclass)
 {
     int i, ret = 0;
     const ASN1_VALUE *skitem;
@@ -414,16 +405,12 @@ static int asn1_set_seq_out(STACK_OF(const_ASN1_VALUE) *sk,
             do_sort = 0;
         else {
             derlst = OPENSSL_malloc(sk_const_ASN1_VALUE_num(sk)
-                                    * sizeof(*derlst));
-            if (derlst == NULL) {
-                ERR_raise(ERR_LIB_ASN1, ERR_R_MALLOC_FAILURE);
+                * sizeof(*derlst));
+            if (derlst == NULL)
                 return 0;
-            }
             tmpdat = OPENSSL_malloc(skcontlen);
-            if (tmpdat == NULL) {
-                ERR_raise(ERR_LIB_ASN1, ERR_R_MALLOC_FAILURE);
+            if (tmpdat == NULL)
                 goto err;
-            }
         }
     }
     /* If not sorting just output each item */
@@ -466,7 +453,7 @@ err:
 }
 
 static int asn1_i2d_ex_primitive(const ASN1_VALUE **pval, unsigned char **out,
-                                 const ASN1_ITEM *it, int tag, int aclass)
+    const ASN1_ITEM *it, int tag, int aclass)
 {
     int len;
     int utype;
@@ -486,8 +473,7 @@ static int asn1_i2d_ex_primitive(const ASN1_VALUE **pval, unsigned char **out,
      * octets so don't include tag+length. We need to check here because the
      * call to asn1_ex_i2c() could change utype.
      */
-    if ((utype == V_ASN1_SEQUENCE) || (utype == V_ASN1_SET) ||
-        (utype == V_ASN1_OTHER))
+    if ((utype == V_ASN1_SEQUENCE) || (utype == V_ASN1_SET) || (utype == V_ASN1_OTHER))
         usetag = 0;
     else
         usetag = 1;
@@ -526,7 +512,7 @@ static int asn1_i2d_ex_primitive(const ASN1_VALUE **pval, unsigned char **out,
 /* Produce content octets from a structure */
 
 static int asn1_ex_i2c(const ASN1_VALUE **pval, unsigned char *cout, int *putype,
-                       const ASN1_ITEM *it)
+    const ASN1_ITEM *it)
 {
     ASN1_BOOLEAN *tbool = NULL;
     ASN1_STRING *strtmp;
@@ -571,6 +557,9 @@ static int asn1_ex_i2c(const ASN1_VALUE **pval, unsigned char *cout, int *putype
             return -1;
         break;
 
+    case V_ASN1_UNDEF:
+        return -2;
+
     case V_ASN1_NULL:
         cont = NULL;
         len = 0;
@@ -595,8 +584,8 @@ static int asn1_ex_i2c(const ASN1_VALUE **pval, unsigned char *cout, int *putype
         break;
 
     case V_ASN1_BIT_STRING:
-        return ossl_i2c_ASN1_BIT_STRING((ASN1_BIT_STRING *)*pval,
-                                        cout ? &cout : NULL);
+        return ossl_i2c_ASN1_BIT_STRING((const ASN1_BIT_STRING *)*pval,
+            cout ? &cout : NULL);
 
     case V_ASN1_INTEGER:
     case V_ASN1_ENUMERATED:
@@ -638,7 +627,6 @@ static int asn1_ex_i2c(const ASN1_VALUE **pval, unsigned char *cout, int *putype
         len = strtmp->length;
 
         break;
-
     }
     if (cout && len)
         memcpy(cout, cont, len);

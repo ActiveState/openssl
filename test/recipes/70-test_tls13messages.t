@@ -1,5 +1,5 @@
 #! /usr/bin/env perl
-# Copyright 2015-2020 The OpenSSL Project Authors. All Rights Reserved.
+# Copyright 2015-2026 The OpenSSL Project Authors. All Rights Reserved.
 #
 # Licensed under the Apache License 2.0 (the "License").  You may not use
 # this file except in compliance with the License.  You can obtain a copy
@@ -12,6 +12,7 @@ use OpenSSL::Test::Utils;
 use File::Temp qw(tempfile);
 use TLSProxy::Proxy;
 use checkhandshake qw(checkhandshake @handmessages @extensions);
+use Cwd qw(abs_path);
 
 my $test_name = "test_tls13messages";
 setup($test_name);
@@ -19,8 +20,8 @@ setup($test_name);
 plan skip_all => "TLSProxy isn't usable on $^O"
     if $^O =~ /^(VMS)$/;
 
-plan skip_all => "$test_name needs the dynamic engine feature enabled"
-    if disabled("engine") || disabled("dynamic-engine");
+plan skip_all => "$test_name needs the module feature enabled"
+    if disabled("module");
 
 plan skip_all => "$test_name needs the sock feature enabled"
     if disabled("sock");
@@ -69,9 +70,10 @@ plan skip_all => "$test_name needs EC enabled"
     [TLSProxy::Message::MT_CLIENT_HELLO, TLSProxy::Message::EXT_SUPPORTED_GROUPS,
         TLSProxy::Message::CLIENT,
         checkhandshake::DEFAULT_EXTENSIONS],
-    [TLSProxy::Message::MT_CLIENT_HELLO, TLSProxy::Message::EXT_EC_POINT_FORMATS,
-        TLSProxy::Message::CLIENT,
-        checkhandshake::DEFAULT_EXTENSIONS],
+    (disabled("tls1_2") ? () :
+        [TLSProxy::Message::MT_CLIENT_HELLO, TLSProxy::Message::EXT_EC_POINT_FORMATS,
+            TLSProxy::Message::CLIENT,
+            checkhandshake::DEFAULT_EXTENSIONS]),
     [TLSProxy::Message::MT_CLIENT_HELLO, TLSProxy::Message::EXT_SIG_ALGS,
         TLSProxy::Message::CLIENT,
         checkhandshake::DEFAULT_EXTENSIONS],
@@ -105,6 +107,9 @@ plan skip_all => "$test_name needs EC enabled"
     [TLSProxy::Message::MT_CLIENT_HELLO, TLSProxy::Message::EXT_POST_HANDSHAKE_AUTH,
         TLSProxy::Message::CLIENT,
         checkhandshake::POST_HANDSHAKE_AUTH_CLI_EXTENSION],
+    [TLSProxy::Message::MT_CLIENT_HELLO, TLSProxy::Message::EXT_RENEGOTIATE,
+        TLSProxy::Message::CLIENT,
+        checkhandshake::DEFAULT_EXTENSIONS],
 
     [TLSProxy::Message::MT_SERVER_HELLO, TLSProxy::Message::EXT_SUPPORTED_VERSIONS,
         TLSProxy::Message::SERVER,
@@ -122,9 +127,10 @@ plan skip_all => "$test_name needs EC enabled"
     [TLSProxy::Message::MT_CLIENT_HELLO, TLSProxy::Message::EXT_SUPPORTED_GROUPS,
         TLSProxy::Message::CLIENT,
         checkhandshake::DEFAULT_EXTENSIONS],
-    [TLSProxy::Message::MT_CLIENT_HELLO, TLSProxy::Message::EXT_EC_POINT_FORMATS,
-        TLSProxy::Message::CLIENT,
-        checkhandshake::DEFAULT_EXTENSIONS],
+    (disabled("tls1_2") ? () :
+        [TLSProxy::Message::MT_CLIENT_HELLO, TLSProxy::Message::EXT_EC_POINT_FORMATS,
+            TLSProxy::Message::CLIENT,
+            checkhandshake::DEFAULT_EXTENSIONS]),
     [TLSProxy::Message::MT_CLIENT_HELLO, TLSProxy::Message::EXT_SIG_ALGS,
         TLSProxy::Message::CLIENT,
         checkhandshake::DEFAULT_EXTENSIONS],
@@ -158,6 +164,9 @@ plan skip_all => "$test_name needs EC enabled"
     [TLSProxy::Message::MT_CLIENT_HELLO, TLSProxy::Message::EXT_POST_HANDSHAKE_AUTH,
         TLSProxy::Message::CLIENT,
         checkhandshake::POST_HANDSHAKE_AUTH_CLI_EXTENSION],
+    [TLSProxy::Message::MT_CLIENT_HELLO, TLSProxy::Message::EXT_RENEGOTIATE,
+        TLSProxy::Message::CLIENT,
+        checkhandshake::DEFAULT_EXTENSIONS],
 
     [TLSProxy::Message::MT_SERVER_HELLO, TLSProxy::Message::EXT_SUPPORTED_VERSIONS,
         TLSProxy::Message::SERVER,
@@ -193,27 +202,35 @@ plan skip_all => "$test_name needs EC enabled"
     [0,0,0,0]
 );
 
+$ENV{OPENSSL_MODULES} = abs_path(bldtop_dir("test"));
+
 my $proxy = TLSProxy::Proxy->new(
     undef,
     cmdstr(app(["openssl"]), display => 1),
     srctop_file("apps", "server.pem"),
-    (!$ENV{HARNESS_ACTIVE} || $ENV{HARNESS_VERBOSE})
+    (!$ENV{HARNESS_ACTIVE} || $ENV{HARNESS_VERBOSE}),
+    have_IPv6()
 );
+my $fatal_alert = 0;
+my $hello_request_added = 0;
+my $hello_request_after_server_hello = 0;
 
 #Test 1: Check we get all the right messages for a default handshake
 (undef, my $session) = tempfile();
 $proxy->serverconnects(2);
-$proxy->clientflags("-sess_out ".$session);
+$proxy->cipherc("DEFAULT:\@SECLEVEL=2");
+$proxy->clientflags("-no_rx_cert_comp -sess_out ".$session);
 $proxy->sessionfile($session);
 $proxy->start() or plan skip_all => "Unable to start up Proxy for tests";
-plan tests => 17;
+plan tests => 19;
 checkhandshake($proxy, checkhandshake::DEFAULT_HANDSHAKE,
                checkhandshake::DEFAULT_EXTENSIONS,
                "Default handshake test");
 
 #Test 2: Resumption handshake
 $proxy->clearClient();
-$proxy->clientflags("-sess_in ".$session);
+$proxy->cipherc("DEFAULT:\@SECLEVEL=2");
+$proxy->clientflags("-no_rx_cert_comp -sess_in ".$session);
 $proxy->clientstart();
 checkhandshake($proxy, checkhandshake::RESUME_HANDSHAKE,
                (checkhandshake::DEFAULT_EXTENSIONS
@@ -226,7 +243,8 @@ SKIP: {
         if disabled("ct") || disabled("ec") || disabled("ocsp");
     #Test 3: A status_request handshake (client request only)
     $proxy->clear();
-    $proxy->clientflags("-status");
+    $proxy->cipherc("DEFAULT:\@SECLEVEL=2");
+    $proxy->clientflags("-no_rx_cert_comp -status");
     $proxy->start();
     checkhandshake($proxy, checkhandshake::DEFAULT_HANDSHAKE,
                    checkhandshake::DEFAULT_EXTENSIONS
@@ -235,7 +253,9 @@ SKIP: {
 
     #Test 4: A status_request handshake (server support only)
     $proxy->clear();
-    $proxy->serverflags("-status_file "
+    $proxy->cipherc("DEFAULT:\@SECLEVEL=2");
+    $proxy->clientflags("-no_rx_cert_comp");
+    $proxy->serverflags("-no_rx_cert_comp -status_file "
                         .srctop_file("test", "recipes", "ocsp-response.der"));
     $proxy->start();
     checkhandshake($proxy, checkhandshake::DEFAULT_HANDSHAKE,
@@ -244,8 +264,9 @@ SKIP: {
 
     #Test 5: A status_request handshake (client and server)
     $proxy->clear();
-    $proxy->clientflags("-status");
-    $proxy->serverflags("-status_file "
+    $proxy->cipherc("DEFAULT:\@SECLEVEL=2");
+    $proxy->clientflags("-no_rx_cert_comp -status");
+    $proxy->serverflags("-no_rx_cert_comp -status_file "
                         .srctop_file("test", "recipes", "ocsp-response.der"));
     $proxy->start();
     checkhandshake($proxy, checkhandshake::DEFAULT_HANDSHAKE,
@@ -256,9 +277,10 @@ SKIP: {
 
     #Test 6: A status_request handshake (client and server) with client auth
     $proxy->clear();
-    $proxy->clientflags("-status -enable_pha -cert "
+    $proxy->cipherc("DEFAULT:\@SECLEVEL=2");
+    $proxy->clientflags("-no_rx_cert_comp -status -enable_pha -cert "
                         .srctop_file("apps", "server.pem"));
-    $proxy->serverflags("-Verify 5 -status_file "
+    $proxy->serverflags("-no_rx_cert_comp -Verify 5 -status_file "
                         .srctop_file("test", "recipes", "ocsp-response.der"));
     $proxy->start();
     checkhandshake($proxy, checkhandshake::CLIENT_AUTH_HANDSHAKE,
@@ -271,8 +293,9 @@ SKIP: {
 
 #Test 7: A client auth handshake
 $proxy->clear();
-$proxy->clientflags("-enable_pha -cert ".srctop_file("apps", "server.pem"));
-$proxy->serverflags("-Verify 5");
+$proxy->cipherc("DEFAULT:\@SECLEVEL=2");
+$proxy->clientflags("-no_rx_cert_comp -enable_pha -cert ".srctop_file("apps", "server.pem"));
+$proxy->serverflags("-no_rx_cert_comp -Verify 5");
 $proxy->start();
 checkhandshake($proxy, checkhandshake::CLIENT_AUTH_HANDSHAKE,
                checkhandshake::DEFAULT_EXTENSIONS |
@@ -281,7 +304,8 @@ checkhandshake($proxy, checkhandshake::CLIENT_AUTH_HANDSHAKE,
 
 #Test 8: Server name handshake (no client request)
 $proxy->clear();
-$proxy->clientflags("-noservername");
+$proxy->cipherc("DEFAULT:\@SECLEVEL=2");
+$proxy->clientflags("-no_rx_cert_comp -noservername");
 $proxy->start();
 checkhandshake($proxy, checkhandshake::DEFAULT_HANDSHAKE,
                checkhandshake::DEFAULT_EXTENSIONS
@@ -290,8 +314,9 @@ checkhandshake($proxy, checkhandshake::DEFAULT_HANDSHAKE,
 
 #Test 9: Server name handshake (server support only)
 $proxy->clear();
-$proxy->clientflags("-noservername");
-$proxy->serverflags("-servername testhost");
+$proxy->cipherc("DEFAULT:\@SECLEVEL=2");
+$proxy->clientflags("-no_rx_cert_comp -noservername");
+$proxy->serverflags("-no_rx_cert_comp -servername testhost");
 $proxy->start();
 checkhandshake($proxy, checkhandshake::DEFAULT_HANDSHAKE,
                checkhandshake::DEFAULT_EXTENSIONS
@@ -300,8 +325,9 @@ checkhandshake($proxy, checkhandshake::DEFAULT_HANDSHAKE,
 
 #Test 10: Server name handshake (client and server)
 $proxy->clear();
-$proxy->clientflags("-servername testhost");
-$proxy->serverflags("-servername testhost");
+$proxy->cipherc("DEFAULT:\@SECLEVEL=2");
+$proxy->clientflags("-no_rx_cert_comp -servername testhost");
+$proxy->serverflags("-no_rx_cert_comp -servername testhost");
 $proxy->start();
 checkhandshake($proxy, checkhandshake::DEFAULT_HANDSHAKE,
                checkhandshake::DEFAULT_EXTENSIONS
@@ -310,7 +336,8 @@ checkhandshake($proxy, checkhandshake::DEFAULT_HANDSHAKE,
 
 #Test 11: ALPN handshake (client request only)
 $proxy->clear();
-$proxy->clientflags("-alpn test");
+$proxy->cipherc("DEFAULT:\@SECLEVEL=2");
+$proxy->clientflags("-no_rx_cert_comp -alpn test");
 $proxy->start();
 checkhandshake($proxy, checkhandshake::DEFAULT_HANDSHAKE,
                checkhandshake::DEFAULT_EXTENSIONS
@@ -319,7 +346,9 @@ checkhandshake($proxy, checkhandshake::DEFAULT_HANDSHAKE,
 
 #Test 12: ALPN handshake (server support only)
 $proxy->clear();
-$proxy->serverflags("-alpn test");
+$proxy->cipherc("DEFAULT:\@SECLEVEL=2");
+$proxy->clientflags("-no_rx_cert_comp");
+$proxy->serverflags("-no_rx_cert_comp -alpn test");
 $proxy->start();
 checkhandshake($proxy, checkhandshake::DEFAULT_HANDSHAKE,
                checkhandshake::DEFAULT_EXTENSIONS,
@@ -327,8 +356,9 @@ checkhandshake($proxy, checkhandshake::DEFAULT_HANDSHAKE,
 
 #Test 13: ALPN handshake (client and server)
 $proxy->clear();
-$proxy->clientflags("-alpn test");
-$proxy->serverflags("-alpn test");
+$proxy->cipherc("DEFAULT:\@SECLEVEL=2");
+$proxy->clientflags("-no_rx_cert_comp -alpn test");
+$proxy->serverflags("-no_rx_cert_comp -alpn test");
 $proxy->start();
 checkhandshake($proxy, checkhandshake::DEFAULT_HANDSHAKE,
                checkhandshake::DEFAULT_EXTENSIONS
@@ -342,9 +372,10 @@ SKIP: {
 
     #Test 14: SCT handshake (client request only)
     $proxy->clear();
+    $proxy->cipherc("DEFAULT:\@SECLEVEL=2");
     #Note: -ct also sends status_request
-    $proxy->clientflags("-ct");
-    $proxy->serverflags("-status_file "
+    $proxy->clientflags("-no_rx_cert_comp -ct");
+    $proxy->serverflags("-no_rx_cert_comp -status_file "
                         .srctop_file("test", "recipes", "ocsp-response.der")
                         ." -serverinfo ".srctop_file("test", "serverinfo2.pem"));
     $proxy->start();
@@ -359,7 +390,9 @@ SKIP: {
 
 #Test 15: HRR Handshake
 $proxy->clear();
-$proxy->serverflags("-curves P-256");
+$proxy->cipherc("DEFAULT:\@SECLEVEL=2");
+$proxy->clientflags("-no_rx_cert_comp");
+$proxy->serverflags("-no_rx_cert_comp -curves P-384");
 $proxy->start();
 checkhandshake($proxy, checkhandshake::HRR_HANDSHAKE,
                checkhandshake::DEFAULT_EXTENSIONS
@@ -368,8 +401,9 @@ checkhandshake($proxy, checkhandshake::HRR_HANDSHAKE,
 
 #Test 16: Resumption handshake with HRR
 $proxy->clear();
-$proxy->clientflags("-sess_in ".$session);
-$proxy->serverflags("-curves P-256");
+$proxy->cipherc("DEFAULT:\@SECLEVEL=2");
+$proxy->clientflags("-no_rx_cert_comp -sess_in ".$session);
+$proxy->serverflags("-no_rx_cert_comp -curves P-384");
 $proxy->start();
 checkhandshake($proxy, checkhandshake::HRR_RESUME_HANDSHAKE,
                (checkhandshake::DEFAULT_EXTENSIONS
@@ -380,11 +414,98 @@ checkhandshake($proxy, checkhandshake::HRR_RESUME_HANDSHAKE,
 
 #Test 17: Acceptable but non preferred key_share
 $proxy->clear();
-$proxy->clientflags("-curves P-256");
+$proxy->cipherc("DEFAULT:\@SECLEVEL=2");
+$proxy->clientflags("-no_rx_cert_comp -curves P-384");
 $proxy->start();
 checkhandshake($proxy, checkhandshake::DEFAULT_HANDSHAKE,
                checkhandshake::DEFAULT_EXTENSIONS
                | checkhandshake::SUPPORTED_GROUPS_SRV_EXTENSION,
                "Acceptable but non preferred key_share");
 
+#Test 18: HelloRequest is reserved in TLSv1.3
+$proxy->clear();
+$fatal_alert = 0;
+$hello_request_added = 0;
+$hello_request_after_server_hello = 0;
+$proxy->filter(\&inject_hello_request);
+$proxy->cipherc("DEFAULT:\@SECLEVEL=2");
+$proxy->clientflags("-no_rx_cert_comp");
+$proxy->start();
+ok($fatal_alert, "HelloRequest rejected in TLSv1.3");
+
+#Test 19: A HelloRequest received after selecting TLSv1.2 in the initial
+#         handshake is still ignored, confirming the legacy skip path is
+#         preserved even when TLSv1.3 was initially enabled.
+SKIP: {
+    skip "TLSv1.2 disabled", 1 if disabled("tls1_2");
+
+    $proxy->clear();
+    $fatal_alert = 0;
+    $hello_request_added = 0;
+    $hello_request_after_server_hello = 1;
+    $proxy->filter(\&inject_hello_request);
+    $proxy->cipherc("DEFAULT:\@SECLEVEL=2");
+    $proxy->clientflags("-no_rx_cert_comp");
+    $proxy->serverflags("-no_tls1_3");
+    $proxy->start();
+    ok(TLSProxy::Message->success() && !$fatal_alert,
+       "HelloRequest ignored in TLSv1.2");
+}
+
 unlink $session;
+
+sub inject_hello_request
+{
+    my $proxy = shift;
+    my $records = $proxy->record_list;
+    my $hello_request;
+    my $record;
+    my $server_hello_record;
+    my $i;
+
+    if ($hello_request_added) {
+        $fatal_alert = 1
+            if @{$records}[-1]->is_fatal_alert(0)
+               == TLSProxy::Message::AL_DESC_UNEXPECTED_MESSAGE;
+        return;
+    }
+
+    return if $proxy->flight != 1;
+
+    $hello_request = pack("C4", TLSProxy::Message::MT_HELLO_REQUEST,
+                          0, 0, 0);
+    $record = TLSProxy::Record->new(
+        1,
+        TLSProxy::Record::RT_HANDSHAKE,
+        TLSProxy::Record::VERS_TLS_1_2,
+        length($hello_request),
+        length($hello_request),
+        length($hello_request),
+        $hello_request,
+        $hello_request
+    );
+
+    if ($hello_request_after_server_hello) {
+        foreach my $message (@{$proxy->message_list}) {
+            next if $message->mt != TLSProxy::Message::MT_SERVER_HELLO
+                    || ${$message->records}[0]->flight != 1;
+
+            $server_hello_record = @{$message->records}[-1];
+            last;
+        }
+
+        return if !defined $server_hello_record;
+
+        for ($i = 0; $i < @{$records}; $i++) {
+            last if ${$records}[$i] == $server_hello_record;
+        }
+        $i++;
+    } else {
+        for ($i = 0; ${$records}[$i]->flight() < 1; $i++) {
+            next;
+        }
+    }
+
+    splice @{$records}, $i, 0, $record;
+    $hello_request_added = 1;
+}

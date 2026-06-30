@@ -1,5 +1,5 @@
 /*
- * Copyright 2020-2022 The OpenSSL Project Authors. All Rights Reserved.
+ * Copyright 2020-2025 The OpenSSL Project Authors. All Rights Reserved.
  *
  * Licensed under the Apache License 2.0 (the "License").  You may not use
  * this file except in compliance with the License.  You can obtain a copy
@@ -16,27 +16,46 @@
 #include "store_local.h"
 #include "crypto/context.h"
 
-int OSSL_STORE_LOADER_up_ref(OSSL_STORE_LOADER *loader)
+static int up_ref_loader(void *method)
 {
+    OSSL_STORE_LOADER *loader = (OSSL_STORE_LOADER *)method;
     int ref = 0;
 
     if (loader->prov != NULL)
-        CRYPTO_UP_REF(&loader->refcnt, &ref, loader->lock);
+        CRYPTO_UP_REF(&loader->refcnt, &ref);
     return 1;
+}
+
+static void free_loader(void *method)
+{
+    OSSL_STORE_LOADER *loader = (OSSL_STORE_LOADER *)method;
+
+    if (loader != NULL && loader->prov != NULL) {
+        int i;
+
+        CRYPTO_DOWN_REF(&loader->refcnt, &i);
+        if (i > 0)
+            return;
+        ossl_provider_free(loader->prov);
+        CRYPTO_FREE_REF(&loader->refcnt);
+    }
+    OPENSSL_free(loader);
+}
+
+int OSSL_STORE_LOADER_up_ref(OSSL_STORE_LOADER *loader)
+{
+#ifdef OPENSSL_NO_CACHED_FETCH
+    return up_ref_loader(loader);
+#else
+    return 1;
+#endif
 }
 
 void OSSL_STORE_LOADER_free(OSSL_STORE_LOADER *loader)
 {
-    if (loader != NULL && loader->prov != NULL) {
-        int i;
-
-        CRYPTO_DOWN_REF(&loader->refcnt, &i, loader->lock);
-        if (i > 0)
-            return;
-        ossl_provider_free(loader->prov);
-        CRYPTO_THREAD_lock_free(loader->lock);
-    }
-    OPENSSL_free(loader);
+#ifdef OPENSSL_NO_CACHED_FETCH
+    free_loader(loader);
+#endif
 }
 
 /*
@@ -48,33 +67,25 @@ static OSSL_STORE_LOADER *new_loader(OSSL_PROVIDER *prov)
     OSSL_STORE_LOADER *loader;
 
     if ((loader = OPENSSL_zalloc(sizeof(*loader))) == NULL
-        || (loader->lock = CRYPTO_THREAD_lock_new()) == NULL) {
+        || !CRYPTO_NEW_REF(&loader->refcnt, 1)
+        || !ossl_provider_up_ref(prov)) {
+        if (loader != NULL)
+            CRYPTO_FREE_REF(&loader->refcnt);
         OPENSSL_free(loader);
         return NULL;
     }
+
     loader->prov = prov;
-    ossl_provider_up_ref(prov);
-    loader->refcnt = 1;
 
     return loader;
-}
-
-static int up_ref_loader(void *method)
-{
-    return OSSL_STORE_LOADER_up_ref(method);
-}
-
-static void free_loader(void *method)
-{
-    OSSL_STORE_LOADER_free(method);
 }
 
 /* Data to be passed through ossl_method_construct() */
 struct loader_data_st {
     OSSL_LIB_CTX *libctx;
-    int scheme_id;               /* For get_loader_from_store() */
-    const char *scheme;          /* For get_loader_from_store() */
-    const char *propquery;       /* For get_loader_from_store() */
+    int scheme_id; /* For get_loader_from_store() */
+    const char *scheme; /* For get_loader_from_store() */
+    const char *propquery; /* For get_loader_from_store() */
 
     OSSL_METHOD_STORE *tmp_store; /* For get_tmp_loader_store() */
 
@@ -96,7 +107,7 @@ static void *get_tmp_loader_store(void *data)
     return methdata->tmp_store;
 }
 
- static void dealloc_tmp_loader_store(void *store)
+static void dealloc_tmp_loader_store(void *store)
 {
     if (store != NULL)
         ossl_method_store_free(store);
@@ -132,7 +143,7 @@ static int unreserve_loader_store(void *store, void *data)
 
 /* Get loader methods from a store, or put one in */
 static void *get_loader_from_store(void *store, const OSSL_PROVIDER **prov,
-                                   void *data)
+    void *data)
 {
     struct loader_data_st *methdata = data;
     void *method = NULL;
@@ -154,9 +165,9 @@ static void *get_loader_from_store(void *store, const OSSL_PROVIDER **prov,
 }
 
 static int put_loader_in_store(void *store, void *method,
-                               const OSSL_PROVIDER *prov,
-                               const char *scheme, const char *propdef,
-                               void *data)
+    const OSSL_PROVIDER *prov,
+    const char *scheme, const char *propdef,
+    void *data)
 {
     struct loader_data_st *methdata = data;
     OSSL_NAMEMAP *namemap;
@@ -170,11 +181,11 @@ static int put_loader_in_store(void *store, void *method,
         return 0;
 
     return ossl_method_store_add(store, prov, id, propdef, method,
-                                 up_ref_loader, free_loader);
+        up_ref_loader, free_loader);
 }
 
 static void *loader_from_algorithm(int scheme_id, const OSSL_ALGORITHM *algodef,
-                                   OSSL_PROVIDER *prov)
+    OSSL_PROVIDER *prov)
 {
     OSSL_STORE_LOADER *loader = NULL;
     const OSSL_DISPATCH *fns = algodef->implementation;
@@ -197,8 +208,7 @@ static void *loader_from_algorithm(int scheme_id, const OSSL_ALGORITHM *algodef,
             break;
         case OSSL_FUNC_STORE_SETTABLE_CTX_PARAMS:
             if (loader->p_settable_ctx_params == NULL)
-                loader->p_settable_ctx_params =
-                    OSSL_FUNC_store_settable_ctx_params(fns);
+                loader->p_settable_ctx_params = OSSL_FUNC_store_settable_ctx_params(fns);
             break;
         case OSSL_FUNC_STORE_SET_CTX_PARAMS:
             if (loader->p_set_ctx_params == NULL)
@@ -220,6 +230,14 @@ static void *loader_from_algorithm(int scheme_id, const OSSL_ALGORITHM *algodef,
             if (loader->p_export_object == NULL)
                 loader->p_export_object = OSSL_FUNC_store_export_object(fns);
             break;
+        case OSSL_FUNC_STORE_DELETE:
+            if (loader->p_delete == NULL)
+                loader->p_delete = OSSL_FUNC_store_delete(fns);
+            break;
+        case OSSL_FUNC_STORE_OPEN_EX:
+            if (loader->p_open_ex == NULL)
+                loader->p_open_ex = OSSL_FUNC_store_open_ex(fns);
+            break;
         }
     }
 
@@ -227,8 +245,8 @@ static void *loader_from_algorithm(int scheme_id, const OSSL_ALGORITHM *algodef,
         || loader->p_load == NULL
         || loader->p_eof == NULL
         || loader->p_close == NULL) {
-        /* Only set_ctx_params is optionaal */
-        OSSL_STORE_LOADER_free(loader);
+        /* Only set_ctx_params is optional */
+        free_loader(loader);
         ERR_raise(ERR_LIB_OSSL_STORE, OSSL_STORE_R_LOADER_INCOMPLETE);
         return NULL;
     }
@@ -241,7 +259,7 @@ static void *loader_from_algorithm(int scheme_id, const OSSL_ALGORITHM *algodef,
  * then call loader_from_algorithm() with that identity number.
  */
 static void *construct_loader(const OSSL_ALGORITHM *algodef,
-                              OSSL_PROVIDER *prov, void *data)
+    OSSL_PROVIDER *prov, void *data)
 {
     /*
      * This function is only called if get_loader_from_store() returned
@@ -273,13 +291,13 @@ static void *construct_loader(const OSSL_ALGORITHM *algodef,
 /* Intermediary function to avoid ugly casts, used below */
 static void destruct_loader(void *method, void *data)
 {
-    OSSL_STORE_LOADER_free(method);
+    free_loader(method);
 }
 
 /* Fetching support.  Can fetch by numeric identity or by scheme */
 static OSSL_STORE_LOADER *
 inner_loader_fetch(struct loader_data_st *methdata,
-                   const char *scheme, const char *properties)
+    const char *scheme, const char *properties)
 {
     OSSL_METHOD_STORE *store = get_loader_store(methdata->libctx);
     OSSL_NAMEMAP *namemap = ossl_namemap_stored(methdata->libctx);
@@ -293,7 +311,7 @@ inner_loader_fetch(struct loader_data_st *methdata,
     }
 
     /* If we haven't received a name id yet, try to get one for the name */
-    id = scheme != NULL ? ossl_namemap_name2num(namemap, scheme) : 0;
+    id = ossl_namemap_name2num(namemap, scheme);
 
     /*
      * If we haven't found the name yet, chances are that the algorithm to
@@ -319,8 +337,9 @@ inner_loader_fetch(struct loader_data_st *methdata,
         methdata->propquery = propq;
         methdata->flag_construct_error_occurred = 0;
         if ((method = ossl_method_construct(methdata->libctx, OSSL_OP_STORE,
-                                            &prov, 0 /* !force_cache */,
-                                            &mcm, methdata)) != NULL) {
+                 &prov, 0 /* !force_cache */,
+                 &mcm, methdata))
+            != NULL) {
             /*
              * If construction did create a method for us, we know that there
              * is a correct scheme_id, since those have already been calculated
@@ -329,7 +348,7 @@ inner_loader_fetch(struct loader_data_st *methdata,
             if (id == 0)
                 id = ossl_namemap_name2num(namemap, scheme);
             ossl_method_store_cache_set(store, prov, id, propq, method,
-                                        up_ref_loader, free_loader);
+                up_ref_loader, free_loader);
         }
 
         /*
@@ -341,29 +360,28 @@ inner_loader_fetch(struct loader_data_st *methdata,
 
     if ((id != 0 || scheme != NULL) && method == NULL) {
         int code = unsupported ? ERR_R_UNSUPPORTED : ERR_R_FETCH_FAILED;
-        const char *helpful_msg =
-            unsupported
-            ? ( "No store loader found. For standard store loaders you need "
-                "at least one of the default or base providers available. "
-                "Did you forget to load them? Info: " )
+        const char *helpful_msg = unsupported
+            ? ("No store loader found. For standard store loaders you need "
+               "at least one of the default or base providers available. "
+               "Did you forget to load them? Info: ")
             : "";
 
         if (scheme == NULL)
             scheme = ossl_namemap_num2name(namemap, id, 0);
         ERR_raise_data(ERR_LIB_OSSL_STORE, code,
-                       "%s%s, Scheme (%s : %d), Properties (%s)",
-                       helpful_msg,
-                       ossl_lib_ctx_get_descriptor(methdata->libctx),
-                       scheme == NULL ? "<null>" : scheme, id,
-                       properties == NULL ? "<null>" : properties);
+            "%s%s, Scheme (%s : %d), Properties (%s)",
+            helpful_msg,
+            ossl_lib_ctx_get_descriptor(methdata->libctx),
+            scheme == NULL ? "<null>" : scheme, id,
+            properties == NULL ? "<null>" : properties);
     }
 
     return method;
 }
 
 OSSL_STORE_LOADER *OSSL_STORE_LOADER_fetch(OSSL_LIB_CTX *libctx,
-                                           const char *scheme,
-                                           const char *properties)
+    const char *scheme,
+    const char *properties)
 {
     struct loader_data_st methdata;
     void *method;
@@ -457,9 +475,9 @@ static void do_one(ossl_unused int id, void *method, void *arg)
 }
 
 void OSSL_STORE_LOADER_do_all_provided(OSSL_LIB_CTX *libctx,
-                                       void (*user_fn)(OSSL_STORE_LOADER *loader,
-                                                       void *arg),
-                                       void *user_arg)
+    void (*user_fn)(OSSL_STORE_LOADER *loader,
+        void *arg),
+    void *user_arg)
 {
     struct loader_data_st methdata;
     struct do_one_data_st data;
@@ -477,8 +495,8 @@ void OSSL_STORE_LOADER_do_all_provided(OSSL_LIB_CTX *libctx,
 }
 
 int OSSL_STORE_LOADER_names_do_all(const OSSL_STORE_LOADER *loader,
-                                   void (*fn)(const char *name, void *data),
-                                   void *data)
+    void (*fn)(const char *name, void *data),
+    void *data)
 {
     if (loader == NULL)
         return 0;
@@ -491,4 +509,12 @@ int OSSL_STORE_LOADER_names_do_all(const OSSL_STORE_LOADER *loader,
     }
 
     return 1;
+}
+
+const OSSL_PARAM *
+OSSL_STORE_LOADER_settable_ctx_params(const OSSL_STORE_LOADER *loader)
+{
+    if (loader != NULL && loader->p_settable_ctx_params != NULL)
+        return loader->p_settable_ctx_params(NULL);
+    return NULL;
 }

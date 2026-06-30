@@ -1,5 +1,5 @@
 #! /usr/bin/env perl
-# Copyright 2015-2021 The OpenSSL Project Authors. All Rights Reserved.
+# Copyright 2015-2025 The OpenSSL Project Authors. All Rights Reserved.
 #
 # Licensed under the Apache License 2.0 (the "License").  You may not use
 # this file except in compliance with the License.  You can obtain a copy
@@ -11,14 +11,17 @@ use strict;
 use warnings;
 
 use File::Spec;
-use OpenSSL::Test qw/:DEFAULT srctop_file/;
+use File::Compare qw(compare);
+use OpenSSL::Test qw/:DEFAULT srctop_file data_file/;
 use OpenSSL::Test::Utils;
 
 setup("test_ec");
 
 plan skip_all => 'EC is not supported in this build' if disabled('ec');
 
-plan tests => 14;
+plan tests => 17;
+
+my $no_fips = disabled('fips') || ($ENV{NO_FIPS} // 0);
 
 require_ok(srctop_file('test','recipes','tconversion.pl'));
 
@@ -31,6 +34,16 @@ subtest 'EC conversions -- private key' => sub {
     tconversion( -type => 'ec', -prefix => 'ec-priv',
                  -in => srctop_file("test","testec-p256.pem") );
 };
+
+SKIP: {
+    skip "SM2 is not supported by this OpenSSL build", 1
+        if disabled("sm2");
+    subtest 'EC conversions -- private key' => sub {
+        tconversion( -type => 'ec', -prefix => 'sm2-priv',
+                     -in => srctop_file("test","testec-sm2.pem") );
+    };
+}
+
 subtest 'EC conversions -- private key PKCS#8' => sub {
     tconversion( -type => 'ec', -prefix => 'ec-pkcs8',
                  -in => srctop_file("test","testec-p256.pem"),
@@ -57,31 +70,82 @@ subtest 'PKEY conversions -- public key' => sub {
                  -args => [ "pkey", "-pubin", "-pubout" ] );
 };
 
-subtest 'Ed25519 conversions -- private key' => sub {
-    tconversion( -type => "pkey", -prefix => "ed25519-pkey-priv",
-                 -in => srctop_file("test", "tested25519.pem") );
+SKIP: {
+    skip "ECX is not supported by this OpenSSL build", 6
+        if disabled("ecx");
+    subtest 'Ed25519 conversions -- private key' => sub {
+        tconversion( -type => "pkey", -prefix => "ed25519-pkey-priv",
+                     -in => srctop_file("test", "tested25519.pem") );
+    };
+    subtest 'Ed25519 conversions -- private key PKCS#8' => sub {
+        tconversion( -type => "pkey", -prefix => "ed25519-pkey-pkcs8",
+                     -in => srctop_file("test", "tested25519.pem"),
+                     -args => ["pkey"] );
+    };
+    subtest 'Ed25519 conversions -- public key' => sub {
+        tconversion( -type => "pkey", -prefix => "ed25519-pkey-pub",
+                     -in => srctop_file("test", "tested25519pub.pem"),
+                     -args => ["pkey", "-pubin", "-pubout"] );
+    };
+    subtest 'Ed448 conversions -- private key' => sub {
+        tconversion( -type => "pkey", -prefix => "ed448-pkey-priv",
+                     -in => srctop_file("test", "tested448.pem") );
+    };
+    subtest 'Ed448 conversions -- private key PKCS#8' => sub {
+        tconversion( -type => "pkey", -prefix => "ed448-pkey-pkcs8",
+                     -in => srctop_file("test", "tested448.pem"),
+                     -args => ["pkey"] );
+    };
+    subtest 'Ed448 conversions -- public key' => sub {
+        tconversion( -type => "pkey", -prefix => "ed448-pkey-pub",
+                     -in => srctop_file("test", "tested448pub.pem"),
+                     -args => ["pkey", "-pubin", "-pubout"] );
+    };
+}
+
+subtest 'EC point conversion form (-conv_form)' => sub {
+    plan tests => 6;
+
+    my $key = srctop_file("test", "testec-p256.pem");
+
+    ok(run(app(['openssl', 'ec', '-in', $key, '-pubout',
+                '-outform', 'DER', '-out', 'ec-conv-unc.der'])),
+       "writing public key with default (uncompressed) conversion form");
+    ok(run(app(['openssl', 'ec', '-in', $key, '-pubout',
+                '-conv_form', 'compressed',
+                '-outform', 'DER', '-out', 'ec-conv-comp.der'])),
+       "writing public key with compressed conversion form");
+    ok((-s 'ec-conv-comp.der') < (-s 'ec-conv-unc.der'),
+       "compressed point encoding is smaller than uncompressed");
+    # The encodings are deterministic for a fixed key, so compare them
+    # against the checked-in reference files.
+    is(compare('ec-conv-unc.der', data_file('ec-conv-unc.der')), 0,
+       "uncompressed encoding matches the reference file");
+    is(compare('ec-conv-comp.der', data_file('ec-conv-comp.der')), 0,
+       "compressed encoding matches the reference file");
+    ok(!run(app(['openssl', 'ec', '-in', $key, '-noout',
+                 '-conv_form', 'bogus'])),
+       "an invalid conversion form is rejected");
 };
-subtest 'Ed25519 conversions -- private key PKCS#8' => sub {
-    tconversion( -type => "pkey", -prefix => "ed25519-pkey-pkcs8",
-                 -in => srctop_file("test", "tested25519.pem"),
-                 -args => ["pkey"] );
-};
-subtest 'Ed25519 conversions -- public key' => sub {
-    tconversion( -type => "pkey", -prefix => "ed25519-pkey-pub",
-                 -in => srctop_file("test", "tested25519pub.pem"),
-                 -args => ["pkey", "-pubin", "-pubout"] );
-};
-subtest 'Ed448 conversions -- private key' => sub {
-    tconversion( -type => "pkey", -prefix => "ed448-pkey-priv",
-                 -in => srctop_file("test", "tested448.pem") );
-};
-subtest 'Ed448 conversions -- private key PKCS#8' => sub {
-    tconversion( -type => "pkey", -prefix => "ed448-pkey-pkcs8",
-                 -in => srctop_file("test", "tested448.pem"),
-                 -args => ["pkey"] );
-};
-subtest 'Ed448 conversions -- public key' => sub {
-    tconversion( -type => "pkey", -prefix => "ed448-pkey-pub",
-                 -in => srctop_file("test", "tested448pub.pem"),
-                 -args => ["pkey", "-pubin", "-pubout"] );
-};
+
+subtest 'Check loading of fips and non-fips keys' => sub {
+    plan skip_all => "FIPS is disabled"
+        if $no_fips;
+
+    plan tests => 2;
+
+    my $fipsconf = srctop_file("test", "fips-and-base.cnf");
+    $ENV{OPENSSL_CONF} = $fipsconf;
+
+    ok(!run(app(['openssl', 'pkey',
+                 '-check', '-in', srctop_file("test", "testec-p112r1.pem")])),
+        "Checking non-fips curve key fails in FIPS provider");
+
+    ok(run(app(['openssl', 'pkey',
+                '-provider', 'default',
+                '-propquery', '?fips!=yes',
+                '-check', '-in', srctop_file("test", "testec-p112r1.pem")])),
+        "Checking non-fips curve key succeeds with non-fips property query");
+
+    delete $ENV{OPENSSL_CONF};
+}

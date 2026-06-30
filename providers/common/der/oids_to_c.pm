@@ -23,8 +23,6 @@ my $OID_def_re = qr/
                        \s* ${OID_value_re}
                    /x;
 
-use Data::Dumper;
-
 sub filter_to_H {
     my ($name, $comment) = @{ shift() };
     my @oid_nums = @_;
@@ -82,7 +80,7 @@ sub _process {
         # print STDERR "-----BEGIN DEBUG-----\n";
         # print STDERR $text;
         # print STDERR "-----END DEBUG-----\n";
-        use re 'debugcolor';
+        use re 'debug';
         while ($text =~ m/${OID_def_re}/sg) {
             my $comment = $&;
             my $name = $1;

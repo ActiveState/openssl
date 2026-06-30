@@ -1,5 +1,5 @@
 #! /usr/bin/env perl
-# Copyright 1995-2021 The OpenSSL Project Authors. All Rights Reserved.
+# Copyright 1995-2024 The OpenSSL Project Authors. All Rights Reserved.
 #
 # Licensed under the Apache License 2.0 (the "License").  You may not use
 # this file except in compliance with the License.  You can obtain a copy
@@ -134,7 +134,7 @@ for (my $i = 0; $i < $n; $i++) {
         my $r = &der_it($v);
         my $z = "";
         my $length = 0;
-        # Format using fixed-with because we use strcmp later.
+        # Format using fixed-width because we use strcmp later.
         foreach (unpack("C*",$r)) {
             $z .= sprintf("0x%02X,", $_);
             $length++;
@@ -164,6 +164,16 @@ print <<"EOF";
  * in the file LICENSE in the source distribution or at
  * https://www.openssl.org/source/license.html
  */
+
+#if !defined(OSSL_LIBCRYPTO_OBJECTS_OBJ_DAT_H)
+#define OSSL_LIBCRYPTO_OBJECTS_OBJ_DAT_H
+
+/* clang-format off */
+
+#include <openssl/asn1.h>
+#include <openssl/objects.h>
+
+#include <crypto/asn1.h>
 
 EOF
 
@@ -209,11 +219,11 @@ printf "static const unsigned int obj_objs[NUM_OBJ] = {\n";
 # Compare DER; prefer shorter; if some length, use the "smaller" encoding.
 sub obj_cmp
 {
-    no warnings "uninitialized";
-    my $A = $obj_len{$obj{$nid{$a}}};
-    my $B = $obj_len{$obj{$nid{$b}}};
+    my $A = $obj_len{$obj{$nid{$a}}} // 0;
+    my $B = $obj_len{$obj{$nid{$b}}} // 0;
     my $r = $A - $B;
     return $r if $r != 0;
+    return 0 if $A == 0;
 
     $A = $obj_der{$obj{$nid{$a}}};
     $B = $obj_der{$obj{$nid{$b}}};
@@ -227,3 +237,5 @@ foreach (sort obj_cmp @a) {
     printf "    %4d,    /* %-32s %s */\n", $_, $m, $v;
 }
 print  "};\n";
+print "/* clang-format on */\n";
+print "\n#endif /* !defined(OSSL_LIBCRYPTO_OBJECTS_OBJ_DAT_H) */\n";
