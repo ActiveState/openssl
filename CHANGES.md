@@ -29,6 +29,17 @@ OpenSSL Releases
 OpenSSL 3.6
 -----------
 
+### Changes between 3.6.3 and 3.6.4 [in pre-release]
+
+ * Fixed `asn1_d2i_read_bio()` so that a clean EOF at an ASN.1 object boundary
+   no longer raises `ASN1_R_NOT_ENOUGH_DATA`.  The error is now only raised for
+   a read error or an EOF in the middle of an object (truncated input).  This
+   restores the behaviour that callers looping over concatenated DER values via
+   `d2i_*_bio()` rely on, such as loading the Windows certificate store through
+   Python's `ssl` module.
+
+   *Marc Gutman*
+
 ### Changes between 3.6.2 and 3.6.3 [9 Jun 2026]
 
  * Fixed heap use-after-free in `PKCS7_verify()`.
