@@ -31,6 +31,16 @@ OpenSSL Releases
 
 ### Changes between 4.0 and 4.1 [xx XXX xxxx]
 
+ * Added unit tests setup activated via `enable-unit-tests` option. This works
+   only on platforms with ld `--wrap` support (Linux, BSD).
+
+   *Jakub Zelenka*
+
+ * Deprecated the `enable-unit-test` configure option and the
+   `SSL_test_functions()` function. Both will be removed in OpenSSL 5.0.
+
+   *Jakub Zelenka*
+
  * Added -testmode option for `s_time` app.
 
    *Jakub Zelenka*
@@ -198,6 +208,11 @@ OpenSSL Releases
    (or other architectures with 128 bit vector registers).
 
    *Timo Keller*
+
+ * Added `EVP_KDF_CTX_get0_kdf()` and `EVP_KDF_CTX_get1_kdf()` functions
+   as a replacement for the now deprecated `EVP_KDF_CTX_kdf()`.
+
+   *Leon Timmermans*
 
  * Add `FIPS_mode()` as a convenience define to
    `EVP_default_properties_is_fips_enabled(NULL)`, which is
@@ -4098,7 +4113,7 @@ breaking changes, and mappings for the large list of deprecated functions.
 
  * Fixed a bug in the function `OCSP_basic_verify` that verifies the signer
    certificate on an OCSP response. The bug caused the function in the case
-   where the (non-default) flag OCSP_NOCHECKS is used to return a postivie
+   where the (non-default) flag OCSP_NOCHECKS is used to return a positive
    response (meaning a successful verification) even in the case where the
    response signing certificate fails to verify.
 
@@ -19896,7 +19911,7 @@ s-cbc           3624.96k     5258.21k     5530.91k     5624.30k     5628.26k
    The new configuration file reading functions are:
 
            NCONF_new, NCONF_free, NCONF_load, NCONF_load_fp, NCONF_load_bio,
-           NCONF_get_section, NCONF_get_string, NCONF_get_numbre
+           NCONF_get_section, NCONF_get_string, NCONF_get_number
 
            NCONF_default, NCONF_WIN32
 
